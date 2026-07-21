@@ -192,7 +192,7 @@ function UploadsWorkspace() {
       let completionMessage = `Upload complete. Staged key: ${result.data.storageKey ?? result.data.uploadId}`;
       if (purpose === 'episode_video' && targetId && result.data.encryptedLocator) {
         const mediaType = file.type.includes('mpegurl') || file.name.toLowerCase().endsWith('.m3u8') ? 'HLS' : file.type.includes('dash') ? 'DASH' : file.type.includes('mp4') ? 'MP4' : 'OTHER';
-        await api.post('/media-assets', { episodeId: targetId, mediaType, provider: 'storage', encryptedLocator: result.data.encryptedLocator, status: 'PROCESSING' });
+        await api.post('/media-assets', { episodeId: targetId, mediaType, provider: 'storage', encryptedLocator: result.data.encryptedLocator, status: 'ACTIVE' });
         completionMessage = 'Upload complete and the secure media asset was attached to the episode.';
       } else if (result.data.storageKey && !String(result.data.storageKey).startsWith('staged:')) {
         if (purpose === 'banner') {

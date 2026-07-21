@@ -112,7 +112,7 @@ export function ContentCatalog() {
             mediaType: detectEpisodeMediaType(videoFile),
             provider: 'storage',
             encryptedLocator: uploadResult.data.encryptedLocator,
-            status: 'PROCESSING',
+            status: 'ACTIVE',
           };
           if (editing?.mediaAsset?.id) await api.patch(`/media-assets/${editing.mediaAsset.id}`, mediaPayload);
           else await api.post('/media-assets', mediaPayload);
