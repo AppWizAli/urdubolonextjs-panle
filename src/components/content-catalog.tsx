@@ -12,7 +12,7 @@ type AnyRecord = Record<string, any>;
 type ContentKind = 'dramas' | 'seasons' | 'episodes';
 type CatalogField = { name: string; label: string; type?: 'text' | 'number' | 'textarea' | 'select' | 'checkbox'; required?: boolean; options?: string[]; placeholder?: string };
 
-const uploadChunkSize = 4 * 1024 * 1024;
+const uploadChunkSize = 16 * 1024 * 1024;
 
 function detectEpisodeMediaType(file: File): 'MP4' | 'HLS' | 'DASH' | 'OTHER' {
   const mime = file.type.toLowerCase();
