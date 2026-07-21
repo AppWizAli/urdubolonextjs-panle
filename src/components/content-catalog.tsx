@@ -23,8 +23,9 @@ function detectEpisodeMediaType(file: File): 'MP4' | 'HLS' | 'DASH' | 'OTHER' {
   return 'OTHER';
 }
 
-async function uploadEpisodeVideo(file: File, episodeId: string) {
+async function uploadEpisodeVideo(file: File, episodeId: string, onProgress?: (percent: number) => void) {
   const totalChunks = Math.ceil(file.size / uploadChunkSize);
+  onProgress?.(1);
   const init = await api.post('/uploads/init', {
     purpose: 'episode_video',
     targetId: episodeId,
@@ -38,9 +39,17 @@ async function uploadEpisodeVideo(file: File, episodeId: string) {
     const body = new FormData();
     body.append('chunk', file.slice(index * uploadChunkSize, Math.min(file.size, (index + 1) * uploadChunkSize)), file.name);
     body.append('chunkIndex', String(index));
-    await api.post(`/uploads/${uploadId}/chunks`, body, { headers: { 'Content-Type': 'multipart/form-data' } });
+    await api.post(`/uploads/${uploadId}/chunks`, body, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (event) => {
+        const chunkProgress = event.total ? event.loaded / event.total : 0;
+        onProgress?.(Math.min(99, Math.round(((index + chunkProgress) / totalChunks) * 100)));
+      },
+    });
   }
-  return api.post(`/uploads/${uploadId}/complete`, { targetId: episodeId });
+  const result = await api.post(`/uploads/${uploadId}/complete`, { targetId: episodeId });
+  onProgress?.(100);
+  return result;
 }
 
 const fields: Record<ContentKind, CatalogField[]> = {
@@ -82,6 +91,7 @@ export function ContentCatalog() {
   const [form, setForm] = useState<{ kind: ContentKind; editing: AnyRecord | null } | null>(null);
   const [notice, setNotice] = useState('');
   const [view, setView] = useState<'grid' | 'list'>('grid');
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   const dramasQuery = useQuery<PageResult<AnyRecord>>({
     queryKey: ['catalog-dramas', search],
@@ -100,12 +110,13 @@ export function ContentCatalog() {
 
   const save = useMutation({
     mutationFn: async ({ kind, editing, payload, videoFile }: { kind: ContentKind; editing: AnyRecord | null; payload: AnyRecord; videoFile?: File | null }) => {
+      setUploadProgress(videoFile ? 0 : null);
       const response = editing ? await api.patch(`${endpoints[kind]}/${editing.id}`, payload) : await api.post(endpoints[kind], payload);
       const record = response.data as AnyRecord;
       if (kind === 'episodes' && videoFile) {
         const episodeId = record.id ?? editing?.id;
         if (!episodeId) throw new Error('Episode id missing after save.');
-        const uploadResult = await uploadEpisodeVideo(videoFile, episodeId);
+        const uploadResult = await uploadEpisodeVideo(videoFile, episodeId, setUploadProgress);
         if (uploadResult.data?.encryptedLocator) {
           const mediaPayload = {
             episodeId,
@@ -122,12 +133,16 @@ export function ContentCatalog() {
     },
     onSuccess: (_data, variables) => {
       setForm(null);
+      setUploadProgress(null);
       setNotice(`${variables.kind.slice(0, -1)} ${variables.editing ? 'updated' : 'created'} successfully.`);
       void client.invalidateQueries({ queryKey: ['catalog-dramas'] });
       void client.invalidateQueries({ queryKey: ['catalog-seasons'] });
       void client.invalidateQueries({ queryKey: ['catalog-episodes'] });
     },
-    onError: (error) => setNotice(apiError(error)),
+    onError: (error) => {
+      setUploadProgress(null);
+      setNotice(apiError(error));
+    },
   });
 
   const dramas = dramasQuery.data?.items ?? [];
@@ -174,7 +189,7 @@ export function ContentCatalog() {
 
     {tab === 'episodes' && <>{selectedSeason && selectedDrama ? <><CatalogContextCard type="season" record={selectedSeason} parent={selectedDrama} onEdit={() => setForm({ kind: 'seasons', editing: selectedSeason })} /><div className="mb-4 flex items-center justify-between"><div><div className="eyebrow">Episodes</div><h3 className="mt-1 text-xl font-bold">Episodes in Season {selectedSeason.seasonNumber}</h3></div><button className="btn-primary" onClick={() => setForm({ kind: 'episodes', editing: null })}><Plus size={15} /> Add episode</button></div>{episodesQuery.isLoading ? <LoadingState label="Loading episodes" /> : episodesQuery.isError ? <ErrorState message={apiError(episodesQuery.error)} onRetry={() => episodesQuery.refetch()} /> : episodes.length ? <EpisodeCards episodes={episodes} view={view} onEdit={(episode) => setForm({ kind: 'episodes', editing: episode })} /> : <EmptyState title="No episodes yet" description="Add the first episode under this season." action={<button className="btn-primary" onClick={() => setForm({ kind: 'episodes', editing: null })}><Plus size={15} /> Add episode</button>} />}</> : <ChooseParent title="Choose a season" description="Open a drama and choose one of its seasons to see the episodes." dramas={dramas} onChoose={showSeasons} />}</>}
 
-    {form && <CatalogForm kind={form.kind} editing={form.editing} dramas={dramas} onCancel={() => setForm(null)} onSubmit={(payload, videoFile) => save.mutate({ kind: form.kind, editing: form.editing, payload, videoFile })} submitting={save.isPending} />}
+    {form && <CatalogForm kind={form.kind} editing={form.editing} dramas={dramas} onCancel={() => setForm(null)} onSubmit={(payload, videoFile) => save.mutate({ kind: form.kind, editing: form.editing, payload, videoFile })} submitting={save.isPending} uploadProgress={uploadProgress} />}
     {notice && <Toast message={notice} kind={notice.includes('successfully') ? 'success' : 'error'} />}
   </div>;
 }
@@ -202,7 +217,7 @@ function CatalogContextCard({ type, record, parent, onEdit }: { type: 'drama' | 
 
 function ChooseParent({ title, description, dramas, onChoose }: { title: string; description: string; dramas: AnyRecord[]; onChoose: (drama: AnyRecord) => void }) { return <section className="surface p-8"><div className="mb-5"><div className="eyebrow">Catalog navigation</div><h3 className="mt-1 text-xl font-bold">{title}</h3><p className="mt-1 text-sm text-slate-500">{description}</p></div>{dramas.length ? <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{dramas.map((drama) => <button key={drama.id} className="flex items-center gap-3 border border-line bg-white p-3 text-left transition hover:border-brand" onClick={() => onChoose(drama)}><CatalogThumbnail src={drama.thumbnailKey} label={drama.name} compact /><span className="min-w-0 flex-1 truncate text-sm font-semibold">{drama.name}</span><ChevronRight size={15} className="text-slate-400" /></button>)}</div> : <EmptyState title="No dramas available" description="Create a drama before adding seasons or episodes." />}</section>; }
 
-function CatalogForm({ kind, editing, dramas, onCancel, onSubmit, submitting }: { kind: ContentKind; editing: AnyRecord | null; dramas: AnyRecord[]; onCancel: () => void; onSubmit: (payload: AnyRecord, videoFile?: File | null) => void; submitting: boolean }) {
+function CatalogForm({ kind, editing, dramas, onCancel, onSubmit, submitting, uploadProgress }: { kind: ContentKind; editing: AnyRecord | null; dramas: AnyRecord[]; onCancel: () => void; onSubmit: (payload: AnyRecord, videoFile?: File | null) => void; submitting: boolean; uploadProgress?: number | null }) {
   const initialDramaId = kind === 'seasons' ? editing?.dramaId ?? editing?.drama?.id ?? '' : kind === 'episodes' ? editing?.season?.drama?.id ?? '' : '';
   const [values, setValues] = useState<AnyRecord>(() => ({ ...editing, dramaId: initialDramaId, seasonId: kind === 'episodes' ? editing?.seasonId ?? '' : undefined }));
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -302,13 +317,26 @@ function CatalogForm({ kind, editing, dramas, onCancel, onSubmit, submitting }: 
               <input className="input h-auto py-2" type="file" accept="video/*,.m3u8,.mpd" onChange={(event) => setVideoFile(event.target.files?.[0] ?? null)} />
             </label>
             {videoFile && (
-              <div className="mt-4 flex items-center gap-3 border border-line bg-white p-3 text-sm">
-                <UploadCloud size={18} className="text-teal" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-semibold">{videoFile.name}</div>
-                  <div className="text-xs text-slate-500">{formatNumber(videoFile.size / 1024 / 1024)} MB</div>
+              <div className="mt-4 border border-line bg-white p-3 text-sm">
+                <div className="flex items-center gap-3">
+                  <UploadCloud size={18} className="text-teal" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-semibold">{videoFile.name}</div>
+                    <div className="text-xs text-slate-500">{formatNumber(videoFile.size / 1024 / 1024)} MB</div>
+                  </div>
+                  <StatusBadge value={detectEpisodeMediaType(videoFile)} />
                 </div>
-                <StatusBadge value={detectEpisodeMediaType(videoFile)} />
+                {uploadProgress !== null && uploadProgress !== undefined && (
+                  <div className="mt-4">
+                    <div className="mb-2 flex items-center justify-between text-xs font-semibold">
+                      <span>{uploadProgress >= 100 ? 'Upload complete' : 'Uploading video'}</span>
+                      <span className="text-brand">{uploadProgress}%</span>
+                    </div>
+                    <div className="h-2 overflow-hidden bg-slate-100">
+                      <div className="h-full bg-teal transition-all" style={{ width: `${uploadProgress}%` }} />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
