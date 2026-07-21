@@ -1,7 +1,15 @@
 import axios from 'axios';
 
+const API_PREFIX = '/api/v1';
+
+function normalizeApiUrl(url: string) {
+  const trimmed = url.trim().replace(/\/+$/, '');
+  if (trimmed.endsWith(API_PREFIX)) return trimmed;
+  return `${trimmed}${API_PREFIX}`;
+}
+
 export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000/api/v1',
+  baseURL: normalizeApiUrl(process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:3200'),
   headers: { 'Content-Type': 'application/json' },
 });
 
