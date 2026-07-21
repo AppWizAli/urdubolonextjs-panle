@@ -178,7 +178,7 @@ function UploadsWorkspace() {
     if (!file) { setNotice('Choose a file first.'); return; }
     setBusy(true); setNotice(''); setProgress(0);
     try {
-      const chunkSize = 16 * 1024 * 1024;
+      const chunkSize = 8 * 1024 * 1024;
       const totalChunks = Math.ceil(file.size / chunkSize);
       const init = await api.post('/uploads/init', { purpose, targetId: targetId || undefined, originalName: file.name, mimeType: file.type || 'application/octet-stream', sizeBytes: file.size, totalChunks });
       const uploadId = init.data.uploadId as string;
