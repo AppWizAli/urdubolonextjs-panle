@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { api, apiError, type PageResult } from '@/lib/api';
 import { EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge, Toast } from './ui';
-import { formatDate, formatNumber } from '@/lib/utils';
+import { formatDate, formatNumber, slugify } from '@/lib/utils';
 
 type AnyRecord = Record<string, any>;
 type ContentKind = 'dramas' | 'seasons' | 'episodes';
@@ -223,7 +223,19 @@ function CatalogForm({ kind, editing, dramas, onCancel, onSubmit, submitting }: 
     }
     const names = fields[kind].map((field) => field.name);
     const parentNames = kind === 'seasons' ? ['dramaId'] : kind === 'episodes' ? ['seasonId'] : [];
-    onSubmit(Object.fromEntries([...parentNames, ...names].map((name) => [name, values[name]])), videoFile);
+    const payload = Object.fromEntries(
+      [...parentNames, ...names]
+        .map((name) => [name, values[name]] as const)
+        .filter(([, value]) => value !== '' && value !== undefined && value !== null),
+    );
+    if (kind === 'dramas') {
+      payload.slug = slugify(String(payload.slug ?? payload.name ?? ''));
+      if (!payload.slug) {
+        setFormError('URL slug is required.');
+        return;
+      }
+    }
+    onSubmit(payload, videoFile);
   }
 
   return (
