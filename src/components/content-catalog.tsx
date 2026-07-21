@@ -119,14 +119,13 @@ export function ContentCatalog() {
         const uploadResult = await uploadEpisodeVideo(videoFile, episodeId, setUploadProgress);
         if (uploadResult.data?.encryptedLocator) {
           const mediaPayload = {
-            episodeId,
             mediaType: detectEpisodeMediaType(videoFile),
             provider: 'storage',
             encryptedLocator: uploadResult.data.encryptedLocator,
             status: 'ACTIVE',
           };
           if (editing?.mediaAsset?.id) await api.patch(`/media-assets/${editing.mediaAsset.id}`, mediaPayload);
-          else await api.post('/media-assets', mediaPayload);
+          else await api.post('/media-assets', { episodeId, ...mediaPayload });
         }
       }
       return record;
