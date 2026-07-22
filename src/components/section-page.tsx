@@ -167,7 +167,20 @@ type SupportConversation = {
   user: { id: string; username: string; email: string; profileImageKey?: string | null };
   lastMessage?: { text?: string; senderType: string; createdAt: string } | null;
 };
-type SupportMessage = { id: string; conversationId: string; senderType: 'USER' | 'ADMIN' | 'SYSTEM'; text?: string; status: string; createdAt: string; seenAt?: string | null };
+type SupportMessage = {
+  id: string;
+  conversationId: string;
+  senderType: 'USER' | 'ADMIN' | 'SYSTEM';
+  messageType?: 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE' | 'FILE' | 'SYSTEM';
+  text?: string;
+  mediaUrl?: string | null;
+  mimeType?: string | null;
+  voiceDuration?: number | null;
+  fileSize?: string | null;
+  status: string;
+  createdAt: string;
+  seenAt?: string | null;
+};
 
 function socketOrigin() {
   const base = String(api.defaults.baseURL ?? '').replace(/\/api\/v1\/?$/, '');
@@ -259,7 +272,7 @@ function MessagesWorkspace() {
               const system = message.senderType === 'SYSTEM';
               return <div key={message.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                 <div className={`${system ? 'mx-auto bg-white/10 text-slate-300' : mine ? 'bg-brand text-white' : 'bg-white/10 text-white'} max-w-[70%] rounded-2xl px-4 py-3 shadow`}>
-                  <div className="whitespace-pre-wrap text-sm leading-6">{message.text}</div>
+                  <SupportMessageMedia message={message} />
                   <div className="mt-1 text-right text-[11px] opacity-70">{formatDate(message.createdAt)} {mine ? message.status.toLowerCase() : ''}</div>
                 </div>
               </div>;
@@ -276,6 +289,24 @@ function MessagesWorkspace() {
       </section>
     </div>
   </div>;
+}
+
+function SupportMessageMedia({ message }: { message: SupportMessage }) {
+  const type = message.messageType ?? 'TEXT';
+  const hasMedia = Boolean(message.mediaUrl);
+  if (type === 'IMAGE' && hasMedia) {
+    return <div className="space-y-2"><img src={message.mediaUrl ?? ''} alt={message.text ?? 'Support image'} className="max-h-72 max-w-sm rounded-xl object-cover" />{message.text && <div className="whitespace-pre-wrap text-sm leading-6">{message.text}</div>}</div>;
+  }
+  if (type === 'VIDEO' && hasMedia) {
+    return <div className="space-y-2"><video src={message.mediaUrl ?? ''} controls className="max-h-72 max-w-md rounded-xl bg-black" />{message.text && <div className="whitespace-pre-wrap text-sm leading-6">{message.text}</div>}</div>;
+  }
+  if (type === 'VOICE' && hasMedia) {
+    return <div className="space-y-2"><div className="text-xs font-semibold uppercase tracking-[0.12em] opacity-70">Voice message {message.voiceDuration ? `· ${Math.floor(message.voiceDuration / 60)}:${String(message.voiceDuration % 60).padStart(2, '0')}` : ''}</div><audio src={message.mediaUrl ?? ''} controls className="w-72 max-w-full" /></div>;
+  }
+  if (type === 'FILE' && hasMedia) {
+    return <a href={message.mediaUrl ?? ''} target="_blank" rel="noreferrer" className="block rounded-xl bg-white/10 px-3 py-2 text-sm font-semibold underline decoration-white/40">{message.text || 'Open attachment'}</a>;
+  }
+  return <div className="whitespace-pre-wrap text-sm leading-6">{message.text}</div>;
 }
 
 function UploadsWorkspace() {
