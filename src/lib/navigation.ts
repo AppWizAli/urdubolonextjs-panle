@@ -13,7 +13,7 @@ export const navigation: NavItem[] = [
   { href: '/subscriptions', label: 'Subscriptions', icon: ReceiptText, permission: 'subscriptions.read' },
   { href: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications.read' },
   { href: '/firebase', label: 'Firebase delivery', icon: MonitorCog, permission: 'notifications.read' },
-  { href: '/messages', label: 'Messages', icon: MessageSquare, permission: 'user.self' },
+  { href: '/messages', label: 'Support Chat', icon: MessageSquare, permission: 'user.self' },
   { href: '/banners', label: 'Banners', icon: PanelsTopLeft, permission: 'banners.read' },
   { href: '/analytics', label: 'Analytics & Reports', icon: BarChart3, permission: 'analytics.read' },
   { href: '/comments', label: 'Comments', icon: Newspaper, permission: 'content.read' },

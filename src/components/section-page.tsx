@@ -2,9 +2,10 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ColumnDef } from '@tanstack/react-table';
-import { Activity, BarChart3, Check, Download, Edit3, FileUp, Plus, RefreshCw, Search, Send, ShieldCheck, Trash2, UploadCloud, UserPlus, X } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
-import { api, apiError, type PageResult } from '@/lib/api';
+import { Activity, BarChart3, Check, Download, Edit3, FileUp, MessageSquare, Plus, RefreshCw, Search, Send, ShieldCheck, Trash2, UploadCloud, UserPlus, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { io, type Socket } from 'socket.io-client';
+import { api, apiError, ensureValidAccessToken, type PageResult } from '@/lib/api';
 import { DataTable } from './data-table';
 import { ErrorState, LoadingState, PageHeader, StatCard, StatusBadge, Toast } from './ui';
 import { formatDate, formatNumber } from '@/lib/utils';
@@ -161,7 +162,121 @@ function AnalyticsWorkspace() { const query = useQuery({ queryKey: ['analytics']
 function ActivityIcon(props: { size?: number }) { return <Activity {...props} />; }
 function CommentsWorkspace() { const [episodeId, setEpisodeId] = useState(''); const query = useQuery({ queryKey: ['comments', episodeId], queryFn: async () => (await api.get(`/episodes/${episodeId}/comments`, { params: { page: 1, limit: 25 } })).data, enabled: episodeId.length > 10 }); const mutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: string }) => api.patch(`/comments/${id}`, { status }), onSuccess: () => query.refetch() }); const remove = useMutation({ mutationFn: (id: string) => api.delete(`/comments/${id}`), onSuccess: () => query.refetch() }); return <div><PageHeader eyebrow="Community" title="Comments" description="Choose an episode to inspect, hide, restore, or delete comments." /><div className="mb-5 flex max-w-2xl items-end gap-2"><div className="flex-1"><RelationshipSelect field={{ name: 'episodeId', label: 'Episode', type: 'relation', relationEndpoint: '/episodes', relationLabel: (item) => `Episode ${item.episodeNumber} · ${item.title ?? 'Untitled'}` }} value={episodeId} onChange={setEpisodeId} /></div><button className="btn-secondary" onClick={() => query.refetch()} disabled={!episodeId}><Search size={16} /> Load</button></div>{query.isFetching ? <LoadingState /> : query.data?.items?.length ? <div className="surface divide-y divide-line">{query.data.items.map((item: AnyRecord) => <div className="flex items-start gap-4 p-5" key={item.id}><div className="flex h-9 w-9 shrink-0 items-center justify-center bg-teal/10 text-xs font-bold text-teal">{item.user?.username?.slice(0, 2).toUpperCase() ?? 'U'}</div><div className="flex-1"><div className="flex justify-between gap-3"><strong>{item.user?.username ?? 'User'}</strong><span className="text-xs text-slate-500">{formatDate(item.createdAt)}</span></div><p className="mt-2 text-sm text-slate-600">{item.body}</p><StatusBadge value={item.status} /></div><div className="flex gap-1"><button className="btn-quiet h-8 px-2 text-red-600" disabled={mutation.isPending} onClick={() => mutation.mutate({ id: item.id, status: 'hidden' })}><Trash2 size={14} /> Hide</button>{item.status === 'hidden' && <button className="btn-quiet h-8 px-2 text-teal" disabled={mutation.isPending} onClick={() => mutation.mutate({ id: item.id, status: 'visible' })}><Check size={14} /> Restore</button>}<button className="btn-quiet h-8 px-2 text-red-600" disabled={remove.isPending} onClick={() => { if (window.confirm('Delete this comment?')) remove.mutate(item.id); }}><Trash2 size={14} /> Delete</button></div></div>)}</div> : <div className="surface p-10 text-center text-sm text-slate-500">Load an episode to review comments.</div>}</div>; }
 function AuditWorkspace() { const query = useQuery({ queryKey: ['audit'], queryFn: async () => (await api.get('/audit', { params: { page: 1, limit: 50 } })).data }); if (query.isLoading) return <LoadingState />; if (query.isError) return <ErrorState message={apiError(query.error)} onRetry={() => query.refetch()} />; const data = query.data ?? {}; return <div><PageHeader eyebrow="Traceability" title="Audit logs" description="A searchable record of sensitive staff and platform actions." /><div className="surface overflow-x-auto"><table className="w-full min-w-[850px] text-left"><thead className="bg-slate-50"><tr>{['Action', 'Resource', 'Outcome', 'Request ID', 'Timestamp'].map((head) => <th key={head} className="border-b border-line px-4 py-3 text-[11px] font-bold uppercase tracking-[0.12em] text-slate-500">{head}</th>)}</tr></thead><tbody>{(data.items ?? []).map((item: AnyRecord) => <tr key={item.id}><td className="table-cell font-semibold">{item.action}</td><td className="table-cell">{item.resource}</td><td className="table-cell"><StatusBadge value={item.outcome} /></td><td className="table-cell font-mono text-xs">{item.requestId}</td><td className="table-cell">{formatDate(item.createdAt)}</td></tr>)}</tbody></table></div></div>; }
-function MessagesWorkspace() { return <ResourceWorkspace section="messages" resource={{ endpoint: '/messages', fields: [{ name: 'userId', label: 'User', type: 'relation', relationEndpoint: '/users', relationLabel: (item) => `${item.username ?? 'User'} · ${item.email ?? ''}`, required: true }, { name: 'message', label: 'Message', type: 'textarea', required: true }], columns: () => [{ accessorKey: 'message', header: 'Message' }, { accessorKey: 'user', header: 'Customer', cell: ({ row }) => row.original.user?.username ?? row.original.userId ?? 'Unknown' }, { accessorKey: 'sender', header: 'From', cell: ({ row }) => row.original.sender?.username ?? 'System' }, { accessorKey: 'status', header: 'Status', cell: ({ row }) => <StatusBadge value={row.original.status} /> }, { accessorKey: 'createdAt', header: 'Sent', cell: ({ row }) => formatDate(row.original.createdAt) }] }} />; }
+type SupportConversation = {
+  id: string; status: string; lastMessageAt?: string; adminUnreadCount: number; userUnreadCount: number;
+  user: { id: string; username: string; email: string; profileImageKey?: string | null };
+  lastMessage?: { text?: string; senderType: string; createdAt: string } | null;
+};
+type SupportMessage = { id: string; conversationId: string; senderType: 'USER' | 'ADMIN' | 'SYSTEM'; text?: string; status: string; createdAt: string; seenAt?: string | null };
+
+function socketOrigin() {
+  const base = String(api.defaults.baseURL ?? '').replace(/\/api\/v1\/?$/, '');
+  return base || 'http://localhost:3200';
+}
+
+function MessagesWorkspace() {
+  const queryClient = useQueryClient();
+  const [selectedId, setSelectedId] = useState<string>('');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('OPEN');
+  const [draft, setDraft] = useState('');
+  const [socketState, setSocketState] = useState('Connecting');
+  const socketRef = useRef<Socket | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const stats = useQuery({ queryKey: ['support-stats'], queryFn: async () => (await api.get('/support/admin/stats')).data });
+  const conversations = useQuery({ queryKey: ['support-conversations', search, filter], queryFn: async () => (await api.get<PageResult<SupportConversation>>('/support/admin/conversations', { params: { page: 1, limit: 50, search: search || undefined, status: filter === 'ALL' ? undefined : filter } })).data });
+  const activeConversation = conversations.data?.items.find((item) => item.id === selectedId) ?? conversations.data?.items[0];
+  const conversationId = activeConversation?.id ?? '';
+  const messages = useQuery({ queryKey: ['support-messages', conversationId], enabled: Boolean(conversationId), queryFn: async () => (await api.get<PageResult<SupportMessage>>(`/support/admin/conversations/${conversationId}/messages`, { params: { page: 1, limit: 100 } })).data });
+  const sendMutation = useMutation({
+    mutationFn: async () => (await api.post(`/support/admin/conversations/${conversationId}/messages`, { text: draft.trim() })).data,
+    onSuccess: () => { setDraft(''); void queryClient.invalidateQueries({ queryKey: ['support-messages', conversationId] }); void queryClient.invalidateQueries({ queryKey: ['support-conversations'] }); },
+  });
+  const statusMutation = useMutation({ mutationFn: async (status: string) => (await api.patch(`/support/admin/conversations/${conversationId}/status`, { status })).data, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['support-conversations'] }) });
+
+  useEffect(() => {
+    let mounted = true;
+    ensureValidAccessToken().then((token) => {
+      if (!mounted || !token) return;
+      const socket = io(`${socketOrigin()}/support-chat`, { auth: { token }, transports: ['websocket', 'polling'], reconnection: true });
+      socketRef.current = socket;
+      socket.on('connect', () => setSocketState('Live'));
+      socket.on('disconnect', () => setSocketState('Offline'));
+      socket.on('message_received', () => { void queryClient.invalidateQueries({ queryKey: ['support-messages'] }); void queryClient.invalidateQueries({ queryKey: ['support-conversations'] }); void queryClient.invalidateQueries({ queryKey: ['support-stats'] }); });
+      socket.on('conversation_updated', () => { void queryClient.invalidateQueries({ queryKey: ['support-conversations'] }); void queryClient.invalidateQueries({ queryKey: ['support-stats'] }); });
+      socket.on('message_seen', () => void queryClient.invalidateQueries({ queryKey: ['support-messages'] }));
+    });
+    return () => { mounted = false; socketRef.current?.disconnect(); socketRef.current = null; };
+  }, [queryClient]);
+
+  useEffect(() => {
+    if (!conversationId) return;
+    socketRef.current?.emit('support:join', { conversationId });
+    void api.post(`/support/conversations/${conversationId}/seen`).catch(() => undefined);
+  }, [conversationId]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages.data?.items.length, conversationId]);
+
+  const statItems = [
+    ['Total Chats', stats.data?.total ?? 0],
+    ['Unread', stats.data?.unread ?? 0],
+    ['Waiting', stats.data?.waiting ?? 0],
+    ['Resolved', stats.data?.resolved ?? 0],
+  ];
+
+  return <div>
+    <PageHeader eyebrow="Realtime support" title="Support Chat" description="Reply to users live from the operations console." actions={<div className="rounded-full border border-line bg-white px-3 py-2 text-xs font-semibold text-slate-600">{socketState}</div>} />
+    <div className="mb-5 grid gap-3 md:grid-cols-4">{statItems.map(([label, value]) => <StatCard key={label} label={String(label)} value={formatNumber(Number(value))} icon={MessageSquare} />)}</div>
+    <div className="grid min-h-[620px] overflow-hidden border border-line bg-white shadow-soft xl:grid-cols-[390px_1fr]">
+      <aside className="border-r border-line bg-slate-50">
+        <div className="space-y-3 border-b border-line p-4">
+          <div className="relative"><Search className="absolute left-3 top-2.5 text-slate-400" size={16} /><input className="input pl-9" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search user" /></div>
+          <div className="grid grid-cols-3 gap-2">{['OPEN', 'UNREAD', 'WAITING', 'RESOLVED', 'BLOCKED', 'ALL'].map((item) => <button key={item} className={`px-2 py-2 text-xs font-semibold ${filter === item ? 'bg-ink text-white' : 'border border-line bg-white text-slate-500'}`} onClick={() => setFilter(item)}>{item}</button>)}</div>
+        </div>
+        <div className="max-h-[520px] overflow-y-auto p-3">
+          {conversations.isLoading ? <LoadingState /> : (conversations.data?.items ?? []).map((conversation) => {
+            const selected = conversation.id === conversationId;
+            return <button key={conversation.id} onClick={() => setSelectedId(conversation.id)} className={`mb-2 flex w-full gap-3 p-3 text-left transition ${selected ? 'bg-ink text-white' : 'bg-white hover:bg-slate-100'}`}>
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand text-sm font-bold text-white">{conversation.user.username.slice(0, 2).toUpperCase()}</div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-bold">{conversation.user.username}</span>{conversation.adminUnreadCount > 0 && <span className="rounded-full bg-brand px-2 py-0.5 text-[11px] font-bold text-white">{conversation.adminUnreadCount}</span>}</div>
+                <div className={`truncate text-xs ${selected ? 'text-slate-300' : 'text-slate-500'}`}>{conversation.user.email}</div>
+                <div className={`mt-1 truncate text-xs ${selected ? 'text-slate-200' : 'text-slate-500'}`}>{conversation.lastMessage?.text ?? 'No message yet'}</div>
+              </div>
+            </button>;
+          })}
+        </div>
+      </aside>
+      <section className="flex min-h-[620px] flex-col bg-slate-950 text-white">
+        {activeConversation ? <>
+          <div className="flex items-center justify-between border-b border-white/10 p-5">
+            <div><div className="text-lg font-bold">{activeConversation.user.username}</div><div className="text-xs text-slate-400">{activeConversation.user.email}</div></div>
+            <div className="flex gap-2">{['OPEN', 'WAITING', 'RESOLVED', 'BLOCKED'].map((status) => <button key={status} onClick={() => statusMutation.mutate(status)} className={`rounded-full px-3 py-2 text-xs font-semibold ${activeConversation.status === status ? 'bg-brand text-white' : 'bg-white/10 text-slate-300'}`}>{status}</button>)}</div>
+          </div>
+          <div className="flex-1 space-y-3 overflow-y-auto p-5">
+            {messages.isLoading ? <LoadingState /> : (messages.data?.items ?? []).map((message) => {
+              const mine = message.senderType === 'ADMIN';
+              const system = message.senderType === 'SYSTEM';
+              return <div key={message.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                <div className={`${system ? 'mx-auto bg-white/10 text-slate-300' : mine ? 'bg-brand text-white' : 'bg-white/10 text-white'} max-w-[70%] rounded-2xl px-4 py-3 shadow`}>
+                  <div className="whitespace-pre-wrap text-sm leading-6">{message.text}</div>
+                  <div className="mt-1 text-right text-[11px] opacity-70">{formatDate(message.createdAt)} {mine ? message.status.toLowerCase() : ''}</div>
+                </div>
+              </div>;
+            })}
+            <div ref={bottomRef} />
+          </div>
+          <div className="border-t border-white/10 p-4">
+            <div className="flex gap-3">
+              <input className="min-h-11 flex-1 rounded-full border border-white/10 bg-white/10 px-4 text-sm outline-none placeholder:text-slate-500" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && draft.trim()) sendMutation.mutate(); }} placeholder="Type your reply..." />
+              <button className="flex h-11 w-11 items-center justify-center rounded-full bg-brand text-white disabled:opacity-50" disabled={!draft.trim() || sendMutation.isPending} onClick={() => sendMutation.mutate()}><Send size={18} /></button>
+            </div>
+          </div>
+        </> : <div className="flex flex-1 items-center justify-center text-slate-400">Select a conversation</div>}
+      </section>
+    </div>
+  </div>;
+}
 
 function UploadsWorkspace() {
   const [file, setFile] = useState<File | null>(null);
